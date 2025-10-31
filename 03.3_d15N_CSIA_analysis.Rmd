@@ -1,0 +1,820 @@
+---
+title: "d15N CSIA Analysis"
+author: "Caila Kucheravy"
+---
+
+Load packages and prep environment: 
+```{r, echo = TRUE, message = FALSE, results = 'hide', warning = FALSE}
+# Clear environment:
+# rm(list=ls())
+
+# Set working directory to source file location
+
+# Load packages
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(stats)
+library(lubridate)
+library(ggfortify)
+library(brms)
+library(bayesplot)
+library(tidybayes)
+library(cowplot)
+library(factoextra)
+library(ggrepel)
+```
+
+## Load and format data:
+
+Load d15N amino acid data & prep for analysis: 
+```{r}
+# Load data including means and standard error 
+d15N_AA <- read.csv("d15N_AA.csv", header = TRUE)
+
+# Prep data:
+d15N_means <- d15N_AA %>% 
+  # Filter for means
+  filter(mean_se == "mean") %>% 
+  # Create new column for sampling group (group sampled in a given year and location)
+  unite(Group, c("Location", "Year"), sep = " ", remove = FALSE) %>% 
+  # Add columns for trophic AAs (Glx and Thr) corrected to Phe:
+  mutate(Glx_Phe = Glx - Phe,
+         Thr_Phe = Thr - Phe) 
+
+# Convert calendar date to julian day:
+d15N_means$Sample_date <- as.Date(d15N_means$Sample_date, "%Y-%m-%d")
+
+d15N_means <- d15N_means %>% 
+  mutate(julian_day = yday(d15N_means$Sample_date)) %>% 
+  relocate(julian_day, .after = Sample_date)
+
+# In the data there are same year and across-year duplicates - note that some samples have both within year and across year duplicates
+# Same year duplicate coding: 
+# 0 = no duplicate 
+# 1 = duplicate sample, first collected 
+# 2 = duplicate sample, second collected (excluded in analysis)
+
+# Across year duplicate coding: 
+# 0 = no duplicate 
+# 1 = duplicate sample, first collected (earlier year)
+# 2 = duplicate sample, second collected (sometimes same year as 1 if there is a 3, sometimes different year than 1)
+# 3 = duplicate sample, third collected (sometimes same year as 2, sometimes different year than 1 & 2)
+
+# Filter out same year and across year duplicates 
+d15N_dups_removed <- d15N_means %>% 
+  filter(!duplicate_in_year == "2") %>% 
+  filter(!duplicate_other_year > 1)
+```
+
+Save data frame: 
+```{r}
+# write_rds(d15N_dups_removed, "d15N_dups_removed.rds")
+```
+
+## Genetic populations
+
+Population-specific mean ± SE:
+```{r}
+# Glx - Phe
+d15N_dups_removed %>% 
+    group_by(genetic_pop) %>%
+    dplyr::summarize(Mean = mean(Glx_Phe),
+                     SE = plotrix::std.error(Glx_Phe))
+# Thr
+d15N_dups_removed %>% 
+    group_by(genetic_pop) %>%
+    dplyr::summarize(Mean = mean(Thr),
+                     SE = plotrix::std.error(Thr))
+# Thr - Phe
+d15N_dups_removed %>% 
+    group_by(genetic_pop) %>%
+    dplyr::summarize(Mean = mean(Thr_Phe),
+                     SE = plotrix::std.error(Thr_Phe))
+
+# Phe
+d15N_dups_removed %>% 
+    group_by(genetic_pop) %>%
+    dplyr::summarize(Mean = mean(Phe),
+                     SE = plotrix::std.error(Phe))
+
+# Lys
+d15N_dups_removed %>% 
+    group_by(genetic_pop) %>%
+    dplyr::summarize(Mean = mean(Lys),
+                     SE = plotrix::std.error(Lys))
+```
+
+Re-arrange data for violin plots: 
+```{r}
+# Trophic AAs: glx, asx, ala, ile, leu, pro, val, thr
+# Source AAs: phe, lys
+
+# Rearrange the data for plotting 
+d15N_means_rearrange <- d15N_dups_removed %>% 
+  dplyr::select(all_of(c("Group", "Location", "Year", "DFO_sample_id", "csia_sample_id", "genetic_pop", "sex", "Phe", "Lys", "Glx_Phe", "Thr", "Thr_Phe"))) %>% 
+  pivot_longer(8:12)
+
+# Order AAs for plotting
+d15N_means_rearrange$name <- factor(d15N_means_rearrange$name, levels = c("Phe", "Lys", "Glx_Phe", "Thr", "Thr_Phe"))
+```
+
+Boxplots by genetic population: 
+```{r}
+outline_cols <- c("#0072B2", "#E69F00")
+fill_cols <- c("#c6eaff", "#fff1d2")
+
+# Arrange data for Phe, Lys, and Glx-Phe
+d15N_means_rearrange_most <- d15N_means_rearrange %>% 
+  dplyr::filter(!name %in% c("Thr", "Thr_Phe")) 
+
+# Arrange data for Thr and Thr-Phe
+d15N_means_rearrange_thr <- d15N_means_rearrange %>% 
+  dplyr::filter(name %in% c("Thr", "Thr_Phe")) 
+
+# Plot Phe, Lys, and Glx-Phe
+most <- ggplot(data = d15N_means_rearrange_most, aes(x = name, y = value, fill = genetic_pop, colour = genetic_pop)) + 
+  geom_rect(aes(xmin = 0.5, xmax = 2.5, ymin = -Inf, ymax = Inf), fill = "grey93", colour = NA) +
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.3, alpha = 0.6) +
+  ylim(0,35) +
+  ylab(expression(paste(delta^{15}, "N", " (\u2030)"))) +
+  scale_fill_manual(values = fill_cols) + 
+  scale_colour_manual(values = outline_cols) +
+  scale_x_discrete(labels = c("Phe" = "Phe", "Lys" = "Lys", "Glx_Phe" = "Glx-Phe")) +
+  theme_classic() + 
+  theme(legend.position = "none",
+        legend.background = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        axis.title.x = element_blank())
+
+# Plot Thr and Thr-Phe
+thr <- ggplot(data = d15N_means_rearrange_thr, aes(x = name, y = value, fill = genetic_pop, colour = genetic_pop)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.3, alpha = 0.6) +
+  ylim(-70,-35) +
+  scale_fill_manual(values = fill_cols) + 
+  scale_colour_manual(values = outline_cols) +
+  scale_x_discrete(labels = c("Thr" = "Thr", "Thr_Phe" = "Thr-Phe")) +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = 14))
+
+# Combine plots
+plot_grid(most, thr, rel_widths = c(1.5,1), labels = NA)
+
+# ggsave("manuscript_plots/violinplots_d15N_allAAs.jpg", dpi = 300, width = 10, height = 5)
+```
+
+Test if Glx-Phe, Thr, Thr-Phe, Phe, and Lys differs between genetic populations. Using brms default priors that are non or weakly informative (negligible effect). See diagnostics and posterior predictive checks, etc. for brms models at the end.
+
+Glx - Phe:
+```{r}
+# # Model (run on server)
+# Glx_Phe__genetic_pop <- brm(Glx_Phe ~ genetic_pop,
+#                               data = d15N_dups_removed,
+#                               warmup = 20000,
+#                               iter = 50000,
+#                               chains = 3,
+#                               init = "random",
+#                               cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Glx_Phe__genetic_pop, "output/Glx_Phe__genetic_pop.rds")
+
+# Load model and view results
+Glx_Phe__genetic_pop <- readRDS("server/Glx_Phe__genetic_pop.rds")
+summary(Glx_Phe__genetic_pop) # Differs between pops
+```
+
+Thr: 
+```{r}
+# # Model (run on server)
+# Thr__genetic_pop <- brm(Thr ~ genetic_pop,
+#                               data = d15N_dups_removed,
+#                               warmup = 20000,
+#                               iter = 50000,
+#                               chains = 3,
+#                               init = "random",
+#                               cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr__genetic_pop, "output/Thr__genetic_pop.rds")
+
+# Load model and view results
+Thr__genetic_pop <- readRDS("server/Thr__genetic_pop.rds")
+summary(Thr__genetic_pop) # Differs between pops
+```
+
+Thr-Phe: 
+```{r}
+# #Model (run on server)
+# Thr_Phe__genetic_pop <- brm(Thr_Phe ~ genetic_pop,
+#                               data = d15N_dups_removed,
+#                               warmup = 20000,
+#                               iter = 50000,
+#                               chains = 3,
+#                               init = "random",
+#                               cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr_Phe__genetic_pop, "output/Thr_Phe__genetic_pop.rds")
+
+# Load model and view results
+Thr_Phe__genetic_pop <- readRDS("server/Thr_Phe__genetic_pop.rds")
+summary(Thr_Phe__genetic_pop) # Differs between pops
+```
+
+Phe:
+```{r}
+# # Model (run on server)
+# Phe__genetic_pop <- brm(Phe ~ genetic_pop,
+#                           data = d15N_dups_removed,
+#                           warmup = 20000,
+#                           iter = 50000,
+#                           chains = 3,
+#                           init = "random",
+#                           cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Phe__genetic_pop, "output/Phe__genetic_pop.rds")
+
+# Load model and view results
+Phe__genetic_pop <- readRDS("server/Phe__genetic_pop.rds")
+summary(Phe__genetic_pop) # No difference
+```
+
+Lys:
+```{r}
+# # Model (run on server)
+# Lys__genetic_pop <- brm(Lys ~ genetic_pop,
+#                           data = d15N_dups_removed,
+#                           warmup = 20000,
+#                           iter = 50000,
+#                           chains = 3,
+#                           init = "random",
+#                           cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Lys__genetic_pop, "output/Lys__genetic_pop.rds")
+
+# Load model and view results
+Lys__genetic_pop <- readRDS("server/Lys__genetic_pop.rds")
+summary(Lys__genetic_pop) # No difference
+```
+
+## Genetic subpopulations
+
+Add column for genetic subpopulations to data frame: 
+```{r}
+# Attach subpop classification to d15 dataset
+d15N_dups_removed_subpops <- d15N_dups_removed %>% 
+  dplyr::mutate(genetic_subpop = ifelse(genetic_pop == "ECAG2", "ECAG2",
+                                        ifelse(Location %in% c("St. P & M", "Newfoundland"), "ECAG1_South", "ECAG1_North"))) %>% 
+  relocate(genetic_subpop, .after = genetic_pop)
+```
+
+Re-arrange data for plotting: 
+```{r}
+d15N_subpops_rearrange <- d15N_dups_removed_subpops %>% 
+  dplyr::select(all_of(c("Group", "Location", "Year", "DFO_sample_id", "csia_sample_id", "genetic_pop", "genetic_subpop", "sex", "Glx_Phe", "Thr", "Thr_Phe"))) %>% 
+  pivot_longer(9:11)
+
+# Order AAs for plotting
+d15N_subpops_rearrange$name <- factor(d15N_subpops_rearrange$name, levels = c("Glx_Phe", "Thr", "Thr_Phe"))
+
+# Arrange data for Phe, Lys, and Glx-Phe
+d15N_subpops_rearrange_glx <- d15N_subpops_rearrange %>% 
+  dplyr::filter(name %in% c("Glx_Phe")) 
+
+# Arrange data for Thr and Thr-Phe
+d15N_subpops_rearrange_thr <- d15N_subpops_rearrange %>% 
+  dplyr::filter(name %in% c("Thr", "Thr_Phe")) 
+```
+
+Violin plots:
+```{r}
+# Set subpopulation colors 
+subpop_outline_cols <- c("#0072B2", "#009e73", "#E69F00")
+subpop_fill_cols    <- c("#c6eaff", "#c5ffef", "#fff1d2")
+
+# Plot Phe, Lys, and Glx-Phe
+glx_subpops <- ggplot(data = d15N_subpops_rearrange_glx, aes(x = name, y = value, fill = genetic_subpop, colour = genetic_subpop)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.1), size = 0.3, alpha = 0.6) +
+  ylim(0,40) +
+  ylab(expression(paste(delta^{15}, "N", " (\u2030)"))) +
+  scale_fill_manual(values = subpop_fill_cols) + 
+  scale_colour_manual(values = subpop_outline_cols) +
+  scale_x_discrete(labels = c("Glx_Phe" = "Glx-Phe")) +
+  theme_classic() + 
+  theme(legend.position = "none",
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        axis.title.x = element_blank())
+
+# Plot Thr and Thr-Phe
+thr_subpops <- ggplot(data = d15N_subpops_rearrange_thr, aes(x = name, y = value, fill = genetic_subpop, colour = genetic_subpop)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.1), size = 0.3, alpha = 0.6) +
+  ylim(-70,-30) +
+  scale_fill_manual(values = subpop_fill_cols, name = "Genetic Subpop", labels = c("ECAG1 North", "ECAG1 South", "ECAG2")) + 
+  scale_colour_manual(values = subpop_outline_cols, name = "Genetic Subpop", labels = c("ECAG1 North", "ECAG1 South", "ECAG2")) +
+  scale_x_discrete(labels = c("Thr" = "Thr", "Thr_Phe" = "Thr-Phe")) +
+  theme_classic() +
+  theme(legend.position = "none",
+        # legend.position = c(0.75, 0.8),
+        # legend.text = element_text(size = 14),
+        # legend.title = element_text(size = 16),
+        legend.background = element_blank(),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = 14))
+
+# Combine plots
+plot_grid(glx_subpops, thr_subpops, rel_widths = c(1,2), labels = NA)
+
+# ggsave("manuscript_plots/violinplot_d15N_subpop.jpg", dpi = 300, width = 6, height = 5)
+```
+
+## Within-population variation:
+
+d15N individuals with duplicates across years: 
+```{r}
+# Filter to include duplicates across years, but exclude duplicates within year: 
+d15N_dups_across <- d15N_means %>% 
+  filter(!duplicate_other_year == "0") %>% 
+  filter(!duplicate_in_year == "2")
+```
+
+Plot values across years:
+```{r}
+# Set colors
+duplicate_cols <- c("#0071b3", "#696fc6", "#ac64c1", "#df58a5", "#fd5c7a", "#ff7748", "#e69d00")
+
+# Glx-Phe
+ggplot(d15N_dups_across, aes(x = Year, y = Glx_Phe, group = duplicate_id, color = duplicate_id, label = DFO_sample_id)) + 
+  geom_point() + 
+  geom_line() + 
+  geom_text_repel(hjust = -0.1, vjust = -0.1, cex = 3) +
+  scale_x_continuous(breaks = seq(13, 2022, 1)) +
+  scale_color_manual(values = duplicate_cols) + 
+  xlab("Sampling Year") +
+  ylab(expression(paste(delta^{15}, N["Glx-Phe"], " (\u2030)"))) +
+  theme_bw() + 
+  theme(legend.position = "none",
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+#ggsave("plots/d15N_dups_glx-phe.jpg", dpi = 300, width = 8, height = 4)
+
+# Thr 
+ggplot(d15N_dups_across, aes(x = Year, y = Thr, group = duplicate_id, color = duplicate_id, label = DFO_sample_id)) + 
+  geom_point() + 
+  geom_line() + 
+  geom_text_repel(hjust = -0.1, vjust = -0.1, cex = 3) +
+  scale_x_continuous(breaks = seq(13, 2022, 1)) +
+  scale_color_manual(values = duplicate_cols) + 
+  xlab("Sampling Year") +
+  ylab(expression(paste(delta^{15}, N["Thr"], " (\u2030)"))) +
+  theme_bw() + 
+  theme(legend.position = "none",
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+#ggsave("plots/d15N_dups_thr.jpg", dpi = 300, width = 8, height = 4)
+
+# Thr-Phe 
+ggplot(d15N_dups_across, aes(x = Year, y = Thr_Phe, group = duplicate_id, color = duplicate_id, label = DFO_sample_id)) + 
+  geom_point() + 
+  geom_line() + 
+  geom_text_repel(hjust = -0.1, vjust = -0.1, cex = 3) +
+  scale_x_continuous(breaks = seq(13, 2022, 1)) +
+  scale_color_manual(values = duplicate_cols) + 
+  xlab("Sampling Year") +
+  ylab(expression(paste(delta^{15}, N["Thr-Phe"], " (\u2030)"))) +
+  theme_bw() + 
+  theme(legend.position = "none",
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 16))
+
+#ggsave("plots/d15N_dups_thr-phe.jpg", dpi = 300, width = 8, height = 4)
+```
+
+Calculate differences between across year duplicates:
+```{r}
+# For Glx-Phe
+d15N_duplicate_difference_Glx_Phe <- d15N_dups_across %>% 
+  # group and arrangy by duplicate id - double checked that they are in the right year order 
+  group_by(duplicate_id) %>% 
+  arrange(.by_group = TRUE) %>% 
+  # Add a column to show whether it was the first or second sample collected
+  mutate(sample_order = 1:2) %>% 
+  # Select columns for manipulation and pivot wider by duplicate ID, with first sample collected in col 1 and second sample collected in col 2
+  dplyr::select(duplicate_id, sample_order, Glx_Phe) %>% 
+  pivot_wider(names_from = sample_order, values_from = Glx_Phe) %>% 
+  # rename columns 1 and 2: 
+  dplyr::rename("sample1" = "1", "sample2" = "2") %>% 
+  # Difference between sample values: 
+  mutate(diff_Glx_Phe = sample2 - sample1)
+
+# See table 
+d15N_duplicate_difference_Glx_Phe
+
+# Do the same for Thr: 
+d15N_duplicate_difference_Thr <- d15N_dups_across %>% 
+  group_by(duplicate_id) %>% 
+  arrange(.by_group = TRUE) %>% 
+  mutate(sample_order = 1:2) %>% 
+  dplyr::select(duplicate_id, sample_order, Thr) %>% 
+  pivot_wider(names_from = sample_order, values_from = Thr) %>% 
+  dplyr::rename("sample1" = "1", "sample2" = "2") %>% 
+  mutate(diff_Thr = sample2 - sample1)
+
+d15N_duplicate_difference_Thr
+
+# And for Thr-Phe: 
+d15N_duplicate_difference_Thr_Phe <- d15N_dups_across %>% 
+  group_by(duplicate_id) %>% 
+  arrange(.by_group = TRUE) %>% 
+  mutate(sample_order = 1:2) %>% 
+  dplyr::select(duplicate_id, sample_order, Thr_Phe) %>% 
+  pivot_wider(names_from = sample_order, values_from = Thr_Phe) %>% 
+  dplyr::rename("sample1" = "1", "sample2" = "2") %>% 
+  mutate(diff_Thr_Phe = sample2 - sample1)
+
+d15N_duplicate_difference_Thr_Phe
+```
+
+Stats for individual inter-annual differences
+```{r}
+# Calculate min, max, and mean difference:
+min(d15N_duplicate_difference_Glx_Phe$diff_Glx_Phe)
+max(d15N_duplicate_difference_Glx_Phe$diff_Glx_Phe)
+mean_diff_Glx_Phe = mean(d15N_duplicate_difference_Glx_Phe$diff_Glx_Phe)
+mean_diff_Glx_Phe
+
+min(d15N_duplicate_difference_Thr_Phe$diff_Thr_Phe)
+max(d15N_duplicate_difference_Thr_Phe$diff_Thr_Phe)
+mean_diff_Thr_Phe = mean(d15N_duplicate_difference_Thr_Phe$diff_Thr_Phe)
+mean_diff_Thr_Phe
+
+min(d15N_duplicate_difference_Thr$diff_Thr)
+max(d15N_duplicate_difference_Thr$diff_Thr)
+mean_diff_Thr     = mean(d15N_duplicate_difference_Thr$diff_Thr)
+mean_diff_Thr
+
+# Calculate mean difference of absolute values:
+absmean_diff_Glx_Phe = mean(abs(d15N_duplicate_difference_Glx_Phe$diff_Glx_Phe))
+absmean_diff_Glx_Phe
+absmean_diff_Thr_Phe = mean(abs(d15N_duplicate_difference_Thr_Phe$diff_Thr_Phe))
+absmean_diff_Thr_Phe
+absmean_diff_Thr     = mean(abs(d15N_duplicate_difference_Thr$diff_Thr))
+absmean_diff_Thr
+```
+
+## Potential confounding variables: 
+
+Plot values by sampling date (in julian day):
+```{r}
+# Glx-Phe
+julian_glx_phe <- ggplot(d15N_dups_removed, aes(x = julian_day, y = Glx_Phe)) + 
+  geom_point() + 
+  geom_smooth(method = lm, col = "#0072B2", fill = "#c6eaff") +
+  labs(x = "", y = "", title = "Glx-Phe", size = 20) +
+  theme_bw()
+
+# Thr
+julian_thr <- ggplot(d15N_dups_removed, aes(x = julian_day, y = Thr)) + 
+  geom_point() + 
+  geom_smooth(method = lm, col = "#0072B2", fill = "#c6eaff") +
+  labs(x = "", y = "", title = "Thr", size = 20) +
+  theme_bw()
+
+# Thr-Phe
+julian_thr_phe <- ggplot(d15N_dups_removed, aes(x = julian_day, y = Thr_Phe)) + 
+  geom_point() + 
+  geom_smooth(method = lm, col = "#0072B2", fill = "#c6eaff") +
+  labs(x = "", y = "", title = "Thr-Phe", size = 20) +
+  theme_bw()
+
+# Arrange plots:
+plot_grid(julian_glx_phe, julian_thr, julian_thr_phe, ncol = 1) + 
+  draw_label("Day of Year", x = 0.5, y = 0, vjust = -0.3, size = 14) + 
+  draw_label(expression(paste(delta^{15}, "N", " (\u2030)")), 
+             x = 0, y = 0.5, vjust = 1.1, angle = 90, size = 14)
+
+# ggsave("manuscript_plots/d15N_x_julianDay.jpg", dpi = 300, width = 5, height = 6)
+```
+
+Test whether Glx-Phe, Thr, and Thr-Phe differ with sampling date:
+
+Glx-Phe: 
+```{r}
+# # Model (run on server)
+# Glx_Phe__julian_day <- brm(Glx_Phe ~ genetic_pop + julian_day,
+#                            data = d15N_dups_removed,
+#                            warmup = 20000,
+#                            iter = 50000,
+#                            chains = 3,
+#                            init = "random",
+#                            cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Glx_Phe__julian_day, "output/Glx_Phe__julian_day.rds")
+
+# Load model and view results
+Glx_Phe__julian_day <- readRDS("server/Glx_Phe__julian_day.rds")
+summary(Glx_Phe__julian_day)
+```
+
+Thr: 
+```{r}
+# # Model (run on server)
+# Thr__julian_day <- brm(Thr ~ genetic_pop + julian_day,
+#                            data = d15N_dups_removed,
+#                            warmup = 20000,
+#                            iter = 50000,
+#                            chains = 3,
+#                            init = "random",
+#                            cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr__julian_day, "output/Thr__julian_day.rds")
+
+# Load model and view results
+Thr__julian_day <- readRDS("server/Thr__julian_day.rds")
+summary(Thr__julian_day)
+```
+
+Thr-Phe
+```{r}
+# # Model (run on server)
+# Thr_Phe__julian_day <- brm(Thr_Phe ~ genetic_pop + julian_day,
+#                            data = d15N_dups_removed,
+#                            warmup = 20000,
+#                            iter = 50000,
+#                            chains = 3,
+#                            init = "random",
+#                            cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr_Phe__julian_day, "output/Thr_Phe__julian_day.rds")
+
+# Load model and view results
+Thr_Phe__julian_day <- readRDS("server/Thr_Phe__julian_day.rds")
+summary(Thr_Phe__julian_day)
+```
+
+No relationship with Julian day for Glx-Phe, Thr, and Thr-Phe.
+
+What about differences between sexes?
+```{r}
+fill_cols_sex <- c("#ff8b8b", "#8bc5ff")
+outline_cols_sex <- c("#8b0000", "#00468b")
+
+# Arrange data for Phe, Lys, and Glx-Phe
+d15N_means_rearrange_glx <- d15N_means_rearrange %>% 
+  dplyr::filter(name %in% c("Glx_Phe")) 
+
+# Arrange data for Thr and Thr-Phe
+d15N_means_rearrange_thr <- d15N_means_rearrange %>% 
+  dplyr::filter(name %in% c("Thr", "Thr_Phe")) 
+
+# Plot Phe, Lys, and Glx-Phe
+glx_sex <- ggplot(data = d15N_means_rearrange_glx, aes(x = name, y = value, fill = sex, colour = sex)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.3, alpha = 0.6) +  
+  ylim(0,40) +
+  ylab(expression(paste(delta^{15}, "N", " (\u2030)"))) +
+  scale_fill_manual(values = fill_cols_sex, name = "Sex", labels = c("Female", "Male")) + 
+  scale_colour_manual(values = outline_cols_sex, name = "Sex", labels = c("Female", "Male")) +
+  scale_x_discrete(labels = c("Glx_Phe" = "Glx-Phe")) +
+  theme_classic() + 
+  theme(legend.position = "none",
+        legend.background = element_blank(),
+        axis.text = element_text(size = 16, colour = "black"),
+        axis.title = element_text(size = 18),
+        axis.title.x = element_blank())
+
+# Plot Thr and Thr-Phe
+thr_sex <- ggplot(data = d15N_means_rearrange_thr, aes(x = name, y = value, fill = sex, colour = sex)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.3, alpha = 0.6) +  
+  ylim(-70,-30) +
+  scale_fill_manual(values = fill_cols_sex) + 
+  scale_colour_manual(values = outline_cols_sex) +
+  scale_x_discrete(labels = c("Thr" = "Thr", "Thr_Phe" = "Thr-Phe")) +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = 16, colour = "black"))
+
+# Combine plots
+plot_grid(glx_sex, thr_sex, rel_widths = c(1.2,1.8), labels = NA)
+
+# ggsave("manuscript_plots/violinplots_d15N_sex.jpg", dpi = 300, width = 6, height = 5)
+```
+
+Test whether Glx-Phe, Thr, and Thr-Phe differ between sexes:
+
+Glx-Phe: 
+```{r}
+# # Model (run on server)
+# Glx_Phe__sex <- brm(Glx_Phe ~ genetic_pop + sex,
+#                     data = d15N_dups_removed,
+#                     warmup = 20000,
+#                     iter = 50000,
+#                     chains = 3,
+#                     init = "random",
+#                     cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Glx_Phe__sex, "output/Glx_Phe__sex.rds")
+
+# Load model and view results
+Glx_Phe__sex <- readRDS("server/Glx_Phe__sex.rds")
+summary(Glx_Phe__sex)
+```
+
+Thr:
+```{r}
+# # Model (run on server)
+# Thr__sex <- brm(Thr ~ genetic_pop + sex,
+#                 data = d15N_dups_removed,
+#                 warmup = 20000,
+#                 iter = 50000,
+#                 chains = 3,
+#                 init = "random",
+#                 cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr__sex, "output/Thr__sex.rds")
+
+# Load model and view results
+Thr__sex <- readRDS("server/Thr__sex.rds")
+summary(Thr__sex)
+```
+
+Thr-Phe:
+```{r}
+# # Model (run on server)
+# Thr_Phe__sex <- brm(Thr_Phe ~ genetic_pop + sex,
+#                     data = d15N_dups_removed,
+#                     warmup = 20000,
+#                     iter = 50000,
+#                     chains = 3,
+#                     init = "random",
+#                     cores = 2)
+# 
+# # Save model (server):
+# saveRDS(Thr_Phe__sex, "output/Thr_Phe__sex.rds")
+
+# Load model and view results
+Thr_Phe__sex <- readRDS("server/Thr_Phe__sex.rds")
+summary(Thr_Phe__sex)
+```
+
+No difference between sexes for Glx-Phe, Thr, and Thr-Phe.
+
+## Diagnostics & Posterior Predictive Checks
+
+Model to be checked: 
+```{r}
+# model to evaluate 
+model <- Thr__genetic_pop   
+# model name
+model_name <- "Thr__genetic_pop"
+# Glx_Phe, Thr, or Thr_Phe
+values <- "Thr"               
+# genetic_pop
+group <- "genetic_pop"            
+```
+
+Set color scheme: 
+```{r}
+# diag_cols <- c("#004064", "#00659e", "#008bd9", "#15abff", "#d9f1ff", "#edf8ff")
+```
+
+Change default font size: 
+```{r}
+bayesplot_theme_update(text = element_text(size = 12))
+```
+
+Check Gelman-Rubin Diagnostics: 
+```{r}
+gr_diag <- brms::rhat(model)
+#write.csv(gr_diag, file = paste("output/gelmanrubin_", model_name, ".csv", sep=""))
+```
+
+Traceplot and posterior density: 
+```{r}
+# Rename parameters: 
+model_array <- as.array(model)
+dimnames(model_array)[[3]] <- c("Intercept", "ECAG2", "Sigma", "Intercept", "lprior", "lp__")
+
+# Set pars for plots:
+pars = c("Intercept", "ECAG2", "Sigma")
+
+# Traceplots: 
+traceplot <- mcmc_trace(model_array, pars = pars, facet_args = list(ncol = 1, strip.position = "left"))
+# ggsave(traceplot, filename = paste("manuscript_plots/posterior_plots/", model_name, "__traceplot.jpeg"), units="in", width = 5.5, height = 3.5, dpi = 300)
+
+# Density plots: 
+dens_plot <- mcmc_dens_overlay(model_array, pars = pars)
+# ggsave(dens_plot, filename = paste("manuscript_plots/posterior_plots/", model_name, "__densplot.jpeg"), units="in", width = 8.5, height = 2.5, dpi = 300)
+```
+
+Autocorrelation plot: 
+```{r}
+mcmc_acf(model_array, pars = pars)
+#ggsave(paste("plots/", model_name, "__autocorrplot.jpeg"), dpi = 300, width = 8, height = 5)
+```
+
+Change default font size for next set of plots: 
+```{r}
+bayesplot_theme_update(text = element_text(size = 18))
+```
+
+Check model fit with posterior predictive check: 
+```{r}
+#Kernel density or empirical CDF estimates of each dataset (row) in yrep are overlaid, with the distribution of y itself on top (and in a darker shade). When using ppc_ecdf_overlay() with discrete data, set the discrete argument to TRUE for better results.
+pp_check_dens_overlay <- pp_check(model, 
+         type = "dens_overlay_grouped", 
+         ndraws = 100, 
+         group = group)
+
+pp_check_dens_overlay + 
+  #scale_x_continuous(limits = c(-70, -40), breaks = seq(-65, -40, by = 5)) +  
+  theme(legend.text = element_text(size = 18),
+        axis.text.x = element_text(size = 18))
+
+# ggsave(paste("manuscript_plots/posterior_plots/", model_name, "__ppcheck_densoverlay.jpeg"), dpi = 300, width = 8, height = 5)
+
+pp_check(model, 
+         type = "stat_grouped", 
+         stat = "mean",
+         ndraws = 100, 
+         group = group)
+
+#ggsave(paste("plots/", model_name, "__ppcheck_meangrouped.jpeg"), dpi = 300, width = 8, height = 5)
+
+# A scatterplot showing the joint distribution of two statistics computed over the datasets (rows) in yrep. The value of the statistics in the observed data is overlaid as large point.
+pp_check(model, 
+         type = "stat_2d", 
+         stat = c("mean", "sd"))
+
+#ggsave(paste("plots/", model_name, "__ppcheck_stat2d.jpeg"), dpi = 300, width = 8, height = 5)
+```
+
+Visualize the d15N values per group with associated uncertainty:
+```{r}
+model %>%
+  # spread 1000 posterior samples for 2 parameters in wide format
+  spread_draws(b_Intercept, b_genetic_groupECAG2, ndraws = 1000, seed = 123) %>%
+  # calculate average numbers and convert to long format for visualisation
+  mutate(ECAG1 = b_Intercept,
+         ECAG2 = b_Intercept + b_genetic_groupECAG2) %>%
+  pivot_longer(cols = c("ECAG1", "ECAG2"), 
+               names_to = group,                
+               values_to = values) %>%
+  # visualise via ggplot()
+  ggplot(aes(y = Thr_Phe, x = genetic_pop, color = genetic_pop, fill = genetic_pop)) +
+    stat_eye(point_interval = "median_qi", .width = c(0.6, 0.9)) + 
+    scale_color_manual(values = outline_cols) +
+    scale_fill_manual(values = fill_cols) +
+    ylab(expression(paste(delta^{15}, N["Thr-Phe"], " (\u2030)"))) +
+    theme_classic() + 
+    theme(legend.position = "none",
+          axis.title.x = element_blank(),
+          axis.text.x = element_text(size = 18),
+          axis.title.y = element_text(size = 18),
+          axis.text.y = element_text(size = 16))
+
+# ggsave(paste("manuscript_plots/posterior_plots/", model_name, "__spreaddraws.jpeg"), dpi = 300, width = 7, height = 5)
+```
+
+
+
+
+

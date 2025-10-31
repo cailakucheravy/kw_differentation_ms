@@ -1,0 +1,160 @@
+---
+title: "LDA of combined d13C and d15N CSIA-AA Data"
+author: "Caila Kucheravy"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Load packages and prep environment: 
+```{r, echo = TRUE, message = FALSE, results = 'hide', warning = FALSE}
+# Clear environment: 
+rm(list = ls())
+
+# Set working directory to source file location
+
+# Load packages:
+library(tidyverse)
+library(MASS)
+library(ggpubr)
+```
+
+Load CSIA-AA data:
+```{r}
+d13C_AAess_dups_removed <- readRDS("d13C_AAess_dups_removed.rds")
+d15N_dups_removed <- readRDS("d15N_dups_removed.rds")
+```
+
+Make new dataframe: 
+```{r}
+d13C <- d13C_AAess_dups_removed %>% 
+  dplyr::select(DFO_sample_id, genetic_pop, Ile, Leu, Met, Phe, Val) 
+
+d15N <- d15N_dups_removed %>% 
+  dplyr::select(DFO_sample_id, Glx_Phe, Thr, Thr_Phe, Phe, Lys) %>% 
+  rename(Phe_15 = Phe)
+
+combined_lda_data <- d13C %>% 
+  left_join(d15N, by = "DFO_sample_id")
+
+# See data:
+head(combined_lda_data)
+```
+
+Standardize data: 
+```{r}
+# Scale data:
+scaled_data <- as.data.frame(scale(combined_lda_data[,3:12]))
+
+# Add sample IDs back to standardized data: 
+scaled_data$DFO_sample_id <- combined_lda_data$DFO_sample_id
+
+# Join scaled data with metadata sheet 
+combined_lda_data_scaled <- d13C %>% 
+  dplyr::select(DFO_sample_id, genetic_pop) %>% 
+  left_join(scaled_data, by = "DFO_sample_id")
+```
+
+Check for collinearity between AAs: 
+```{r}
+library(PerformanceAnalytics)
+
+# jpeg("corrplot_AAs.jpeg", width = 7, height = 7, units = "in", res = 600)
+chart.Correlation(combined_lda_data_scaled[,3:12], histogram = TRUE, pch = 19)
+# dev.off()
+```
+
+Remove d15N Thr and Phe due to collinearity, re-scale: 
+```{r}
+combined_lda_data2 <- combined_lda_data %>% 
+  dplyr::select(-c(Thr, Phe_15))
+
+# Scale data:
+scaled_data <- as.data.frame(scale(combined_lda_data2[,3:10]))
+
+# Add sample IDs back to standardized data: 
+scaled_data$DFO_sample_id <- combined_lda_data2$DFO_sample_id
+
+# Join scaled data with metadata sheet 
+combined_lda_data_scaled <- combined_lda_data2 %>% 
+  dplyr::select(DFO_sample_id, genetic_pop) %>% 
+  left_join(scaled_data, by = "DFO_sample_id")
+```
+
+Discriminant analysis: 
+```{r}
+# Run discriminant analysis; genetic groups by the 5 AAess
+combined_lda <- lda(data = combined_lda_data_scaled,
+                    genetic_pop ~ Ile + Leu + Met + Phe + Val + Glx_Phe + Thr_Phe + Lys)
+
+# See results 
+combined_lda
+```
+
+Extract LD1 coefficients and order: 
+```{r}
+combined_lda$scaling %>% 
+  as.data.frame() %>% 
+  arrange(desc(LD1))
+```
+
+Extract fitted (predicted) values: 
+```{r}
+combined_lda_pred <- predict(combined_lda, combined_lda_data_scaled)
+```
+
+See if the LDA correctly categorized the data: 
+```{r}
+class <- combined_lda_pred$class
+table <- table(combined_lda_data_scaled$genetic_pop, class)
+table
+
+classifications <- as.data.frame(cbind(combined_lda_data_scaled$DFO_sample_id, combined_lda_data_scaled$genetic_group, class))
+```
+
+Extract predicted values from model: 
+```{r}
+combined_lda_pred_x <- data.frame(combined_lda_pred$x)
+combined_lda_pred_x$genetic_pop <- combined_lda_data_scaled$genetic_pop
+```
+
+Histogram: 
+```{r}
+# Autoplot: 
+plot(combined_lda)
+
+# Set colors 
+outline_cols <- c("#0072B2", "#E69F00")
+fill_cols <- c("#c6eaff", "#fff1d2")
+
+# Nicer histogram:
+ggplot(combined_lda_pred_x, 
+                 aes(x = LD1, color = genetic_pop, fill = genetic_pop)) + 
+  geom_histogram(position = "identity") +
+  scale_color_manual(values = outline_cols) +
+  scale_fill_manual(values = fill_cols) +
+  theme_classic() + 
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.position = c(0.9, 0.9))
+```
+
+Plot: 
+```{r}
+# Violin plot of predicted values from the model object
+ggplot(combined_lda_pred_x, 
+       aes(x = genetic_pop, y = LD1, colour = genetic_pop, fill = genetic_pop)) + 
+  geom_violin(position = position_dodge(0.75)) + 
+  geom_boxplot(width = 0.075, position = position_dodge(0.75), fill = "white") +
+  geom_point(position = position_jitterdodge(jitter.width = 0.2), size = 0.3, alpha = 0.6) +
+  geom_jitter(size = 0.5, width = 0.3) + 
+  scale_color_manual(values = outline_cols) + 
+  scale_fill_manual(values = fill_cols) +
+  theme_classic() + 
+  theme(axis.title.x = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        legend.position = "none")
+
+# ggsave("manuscript_plots/combined_LDA_violinplots.jpg", dpi = 300,  width = 3, height = 5)
+```

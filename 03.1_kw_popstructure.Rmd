@@ -1,0 +1,443 @@
+---
+title: "KW Population Structure Analysis"
+author: "Caila Kucheravy"
+---
+
+Examine population structure using PCA. Script modified from E. de Greef, help from the PCAdapt vignette: https://bcm-uga.github.io/pcadapt/articles/pcadapt.html. 
+
+Prep the environment: 
+```{r setup, results = FALSE}
+setwd("~/Dropbox/killer_whale_genomics/snps4/pop_structure_filtering")
+
+library(pcadapt)
+library(ggplot2)
+library(ggrepel)
+library(patchwork)
+library(dplyr)
+library(StAMPP)
+library(vcfR)
+```
+
+Load sample info: 
+```{r, results = FALSE}
+sample_info <- read.csv("killerwhale_genomics_sample_info.csv", header=T)
+```
+
+Filter duplicates and close kin from metadata file:
+```{r}
+sample_info_all <- sample_info %>% 
+  filter(!remove_duplicates=="x") %>% 
+  filter(!remove_closekin=="x")
+```
+
+Verify that snp file IDs are the in the same order as the metadata file:
+```{r}
+snp_IDs <- read.table("filtered_snps/killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.fam")
+snp_IDs$vcf_ID <- sample_info_all$genome_sample_ID
+snp_IDs$all_equal <- snp_IDs$V1==snp_IDs$vcf_ID #column should all say "TRUE"
+snp_IDs$all_equal
+```
+
+## PCA - All individuals with kin removed
+
+Load SNP data with pcadapt: 
+```{r}
+snp_data_popstructure <- read.pcadapt("filtered_snps/killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.bed", type = "bed")
+```
+
+Run pcadapt, setting k-value to the desired number of eigenvectors to be produced: 
+```{r}
+pca <- pcadapt(input = snp_data_popstructure, K = 18)
+```
+
+Plot screeplot and PCA: 
+```{r, warning = FALSE}
+# Quick screeplot: 
+plot(pca, option = "screeplot")
+
+# Quick PCA: 
+plot(pca, option = "scores", pop = sample_info_all$location_name, labels = sample_info_all$genome_sample_ID)
+```
+
+Examine PCA scores, loadings, and z-scores, and calculate proportion variance for first few eigenvectors: 
+```{r}
+# scores:
+scores <- as.data.frame(pca$scores)
+
+# loadings: 
+loadings <- as.data.frame(pca$loadings)
+
+# z-scores: 
+z_scores <- as.data.frame(pca$zscores)
+
+# proportion variance
+proportion <- as.data.frame(pca$singular.values)
+proportion$squared <- proportion$`pca$singular.values`* proportion$`pca$singular.values`
+prop_var <- as.data.frame(proportion$squared)
+PC1_proportion <- (round(prop_var[1,], digits=4))*100
+PC2_proportion <- (round(prop_var[2,], digits=4))*100
+```
+
+Nice screeplot: 
+```{r, warning = FALSE}
+prop_var$num <- 1:nrow(prop_var)
+
+scree <- ggplot(data=prop_var, aes(x=num, y=prop_var$`proportion$squared`)) +
+  geom_point(col = "#0071b3") +
+  geom_line(col = "#0071b3") +
+  scale_y_continuous(breaks = seq(0,0.22,0.02)) +
+  ylab("Proportion of explained variance") +
+  xlab("PC") + 
+  theme_classic() + 
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+
+scree
+
+# ggsave("pca_scree_plot_all.png", plot = scree, width=6, height=4.5, dpi=300)
+```
+
+Nice PCA: 
+```{r, warning = FALSE}
+# Order locations for plotting: 
+sample_info_all$location_name <- factor(sample_info_all$location_name, levels = c("Mittimatalik", "Pangnirtung", "Newfoundland", "St Pierre et Miquelon", "Ittoqqortoormiit, East Greenland", "Tasiilaq, East Greenland", "Naujaat", "Nuuk, West Greenland"))
+
+# Set cols: 
+#          Pond       Pang       Nfld       SP&M       Scores    Tasiilaq   Naujaat    Nuuk             
+cols <- c("#004c78", "#0071b3", "#0096ee", "#3db8ff", "#8cd5ff","#ab7500", "#e69d00", "#ffbf35")
+
+evec <- cbind(sample_info_all$genome_sample_ID, scores)
+colnames(evec)[1] <- "sample"
+
+ggplot(data=evec, aes(x=V1,y=V2))+
+  geom_point(aes(color=sample_info_all$location_name),size=2, alpha=0.9)+
+  theme_classic()+
+  xlab(paste("PC1 (", PC1_proportion, "%)", sep=""))+
+  ylab(paste("PC2 (", PC2_proportion, "%)", sep=""))+
+  #geom_text_repel(aes(label=sample_info_all$genome_sample_ID), size=2)+
+  scale_color_manual(values = cols, name = "Region") + 
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(size = 14))
+
+# ggsave("pca_biplot_all.png", width=8, height=4.5, dpi=300)
+```
+
+
+## PCA - All individuals (without kin removed) 
+
+Load data and sample info, remove duplicates, verify that snp file IDs match sample file:
+```{r}
+# Load snpdata: 
+snp_data_wkin <- read.pcadapt("filtered_snps_nokinremoved/killerwhale4_snps.ID.dups_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.bed", type = "bed")
+
+# Filter sample info:
+sample_info_wkin <- sample_info %>% 
+  filter(!remove_duplicates == "x")
+
+# Make sure order in metadata sheet matches snp files:
+snp_IDs_wkin <- read.table("filtered_snps_nokinremoved/killerwhale4_snps.ID.dups_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.fam") 
+snp_IDs_wkin$vcf_ID <- sample_info_wkin$genome_sample_ID
+snp_IDs_wkin$all_equal <- snp_IDs_wkin$V1==snp_IDs_wkin$vcf_ID 
+snp_IDs_wkin$all_equal #column should all say "TRUE"
+```
+
+Run pcadapt: 
+```{r}
+pca_wkin <- pcadapt(input = snp_data_wkin, K = 18)
+```
+
+Plot screeplot and PCA: 
+```{r, warning = FALSE}
+# Screeplot: 
+plot(pca_wkin, option = "screeplot")
+
+# Quick PCA: 
+plot(pca_wkin, option = "scores", pop = sample_info_wkin$location_name, labels = sample_info_wkin$genome_sample_ID)
+```
+
+Examine PCA scores, loadings, and z-scores, and calculate proportion variance for first few eigenvectors: 
+```{r}
+# scores:
+scores_wkin <- as.data.frame(pca_wkin$scores)
+
+# loadings: 
+loadings_wkin <- as.data.frame(pca_wkin$loadings)
+
+# z-scores: 
+z_scores_wkin <- as.data.frame(pca_wkin$zscores)
+
+# proportion variance
+proportion_wkin <- as.data.frame(pca_wkin$singular.values)
+proportion_wkin$squared <- proportion_wkin$`pca_wkin$singular.values`* proportion_wkin$`pca_wkin$singular.values`
+prop_var_wkin <- as.data.frame(proportion_wkin$squared)
+wkin_PC1_proportion <- (round(prop_var_wkin[1,], digits=4))*100
+wkin_PC2_proportion <- (round(prop_var_wkin[2,], digits=4))*100
+```
+
+Nice screeplot: 
+```{r}
+prop_var_wkin$num <- 1:nrow(prop_var_wkin)
+
+scree_wkin <- ggplot(data=prop_var_wkin, aes(x=num, y=prop_var_wkin$`proportion_wkin$squared`))+
+  geom_point(col = "#0071b3") +
+  geom_line(col = "#0071b3") +
+  ylab("Proportion of explained variance")+
+  xlab("PC") + 
+  theme_classic()
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+
+scree_wkin
+
+# ggsave("pca_scree_plot_wkin.png", plot = scree_wkin, width=6, height=4.5, dpi=300)
+```
+
+Nice PCA:
+```{r}
+# Order locations for plotting: 
+sample_info_wkin$location_name <- factor(sample_info_wkin$location_name, levels = c("Mittimatalik", "Pangnirtung", "Newfoundland", "St Pierre et Miquelon", "Ittoqqortoormiit, East Greenland", "Tasiilaq, East Greenland", "Naujaat", "Nuuk, West Greenland"))
+
+evec_wkin <- cbind(sample_info_wkin$genome_sample_ID, scores_wkin)
+colnames(evec_wkin)[1] <- "sample"
+
+biplot_wkin <- ggplot(data=evec_wkin, aes(x=V1,y=V2))+
+  geom_point(aes(color=sample_info_wkin$location_name),size=2, alpha=0.9)+
+  theme_classic()+
+  xlab(paste("PC1 (", wkin_PC1_proportion, "%)", sep=""))+
+  ylab(paste("PC2 (", wkin_PC2_proportion, "%)", sep=""))+
+  #geom_text_repel(aes(label=sample_info_wkin$genome_sample_ID), size=2)+
+  scale_color_manual(values = cols, name = "Region") + 
+  labs(color= "Region") + 
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 12))
+
+biplot_wkin
+
+#ggsave("pca_biplot_wkin.png", plot = biplot_wkin, width=8, height=4.5, dpi=300)
+```
+
+
+## PCA - ECAC1 Only 
+
+Load data and sample info, remove duplicates and Greenland/Low Arctic whales, verify that snp file IDs match sample file:
+```{r}
+# Load snpdata: 
+snp_data_ECAG1 <- read.pcadapt("ECAG1_only/killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.ECAG1_only.recode.bed", type = "bed")
+
+# Filter sample info:
+sample_info_ECAG1 <- sample_info_all %>% 
+  filter(!remove_ECAG2 == "x")
+
+# Make sure order in metadata sheet matches snp files:
+snp_IDs_ECAG1 <- read.table("ECAG1_only/killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.ECAG1_only.recode.fam") 
+snp_IDs_ECAG1$vcf_ID <- sample_info_ECAG1$genome_sample_ID
+snp_IDs_ECAG1$all_equal <- snp_IDs_ECAG1$V1==snp_IDs_ECAG1$vcf_ID 
+snp_IDs_ECAG1$all_equal #column should all say "TRUE"
+```
+
+Run pcadapt: 
+```{r}
+pca_ECAG1 <- pcadapt(input = snp_data_ECAG1, K = 18)
+```
+
+Plot screeplot and PCA: 
+```{r, warning = FALSE}
+# Screeplot: 
+plot(pca_ECAG1, option = "screeplot")
+
+# Quick PCA: 
+plot(pca_ECAG1, option = "scores", pop = sample_info_ECAG1$location_name, labels = sample_info_ECAG1$genome_sample_ID)
+```
+
+Examine PCA scores, loadings, and z-scores, and calculate proportion variance for first few eigenvectors: 
+```{r}
+# scores:
+scores_ECAG1 <- as.data.frame(pca_ECAG1$scores)
+
+# loadings: 
+loadings_ECAG1 <- as.data.frame(pca_ECAG1$loadings)
+
+# z-scores: 
+z_scores_ECAG1 <- as.data.frame(pca_ECAG1$zscores)
+
+# proportion variance
+proportion_ECAG1 <- as.data.frame(pca_ECAG1$singular.values)
+proportion_ECAG1$squared <- proportion_ECAG1$`pca_ECAG1$singular.values`* proportion_ECAG1$`pca_ECAG1$singular.values`
+prop_var_ECAG1 <- as.data.frame(proportion_ECAG1$squared)
+ECAG1_PC1_proportion <- (round(prop_var_ECAG1[1,], digits=4))*100
+ECAG1_PC2_proportion <- (round(prop_var_ECAG1[2,], digits=4))*100
+```
+
+Nice scree plot:
+```{r}
+prop_var_ECAG1$num <- 1:nrow(prop_var_ECAG1)
+
+scree_ECAG1 <- ggplot(data=prop_var_ECAG1, aes(x=num, y=prop_var_ECAG1$`proportion_ECAG1$squared`))+
+  geom_point(col = "#0071b3") +
+  geom_line(col = "#0071b3") +
+  ylab("Proportion of explained variance")+
+  xlab("PC") + 
+  theme_classic()
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14))
+
+scree_ECAG1
+
+# ggsave("pca_scree_plot_ECAG1.png", plot = scree_ECAG1, width=6, height=4.5, dpi=300)
+```
+
+Nice PCA:
+```{r}
+# Set cols: 
+#                Pond       Pang       Nfld       SP&M       Scores          
+cols_ECAG1 <- c("#004c78", "#3db8ff", "#006348", "#00c590", "#b66645")
+
+
+evec_ECAG1 <- cbind(sample_info_ECAG1$genome_sample_ID, scores_ECAG1)
+colnames(evec_ECAG1)[1] <- "sample"
+
+biplot_ECAG1 <- ggplot(data=evec_ECAG1, aes(x=V1,y=V2))+
+  geom_point(aes(color=sample_info_ECAG1$location_name),size=2, alpha=0.9)+
+  theme_classic()+
+  xlab(paste("PC1 (", ECAG1_PC1_proportion, "%)", sep=""))+
+  ylab(paste("PC2 (", ECAG1_PC2_proportion, "%)", sep=""))+
+  #geom_text_repel(aes(label=sample_info2$genome_sample_ID), size=2)+
+  scale_color_manual(values = cols_ECAG1, name = "Region") + 
+  labs(color= "Region") + 
+  theme(axis.title = element_text(size = 16),
+        axis.text = element_text(size = 14),
+        legend.text = element_text(size = 12))
+
+biplot_ECAG1
+
+#ggsave("pca_biplot_ECAG1.png", plot = biplot_ECAG1, width=8, height=4.5, dpi=300)
+```
+
+
+## FST
+
+### ECAG1 and ECAG2 
+
+First, assign individuals to populations based on the PCA:
+```{r}
+pc1_for_grouping <- evec %>% 
+  dplyr::select(sample, V1, V2) %>% 
+  mutate(genetic_group = if_else(V1 > -0.1, "ECAG1", "ECAG2")) %>% 
+  rename("genome_sample_ID" = "sample")
+
+sample_info_genetic_group <- sample_info %>% 
+  left_join(pc1_for_grouping, by = "genome_sample_ID")
+
+# saveRDS(sample_info_genetic_group, "sample_info_genetic_groups.rds")
+
+# Check to make sure this worked:
+ggplot(data = sample_info_genetic_group, aes(x = V1, y = V2))+
+  geom_point(aes(color = genetic_group),size=2, alpha=0.9)+
+  theme_classic()
+```
+
+
+*This section run on external server*
+
+Load snps with vcfR: 
+```{r}
+# library(dplyr)
+# library(StAMPP)
+# library(vcfR)
+# 
+# # Populate the ID column of VCF data:
+# snps <- read.vcfR("killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.vcf")
+# 
+# # add IDs:
+# snps <- addID(snps, sep = "_")
+# 
+# # Convert vcfR objects to objects supported by other R packages (such as StAMPP)
+# snp_data_fst <- vcfR2genlight(snps)
+```
+
+Add pop info to the snp data: 
+```{r}
+# sample_info <- readRDS("sample_info_genetic_groups.rds")
+# snp_data_fst@pop <- as.factor(sample_info$genetic_group)
+# fst_snps <- snp_data_fst
+```
+
+Calculate fst: 
+```{r}
+# # Calculate Fst - run on server
+# kws_fst <- stamppFst(fst_snps, nboots = 100, percent = 95, nclusters = 45)
+# saveRDS(kws_fst, "kw_fst.rds")
+# write.csv(kws_fst, "kw_fst.csv")
+```
+
+*Continue in R*
+
+Load results: 
+```{r}
+kws_fst <- readRDS("Fst/kw_fst.rds")
+kws_fst
+```
+
+
+### With ECAG1 substructure
+
+First, assign individuals to populations:
+```{r}
+# Sort out NFLD/SP&M individuals, remove 
+locations <- c("Newfoundland", "St Pierre et Miquelon")
+
+sample_info_genetic_subgroup <- sample_info_genetic_group %>% 
+  mutate(genetic_subgroup = if_else(genetic_group == "ECAG2", "ECAG2", 
+                                    if_else(location_name %in% locations, "ECAG1_south",
+                                            if_else(location_name == "Ittoqqortoormiit, East Greenland", "Ittoqqortoormiit", "ECAG1_north"))))
+
+# saveRDS(sample_info_genetic_subgroup, "sample_info_genetic_subgroup.rds")
+
+# Check to see that it worked
+ggplot(data = sample_info_genetic_subgroup, aes(x = V1, y = V2))+
+  geom_point(aes(color = genetic_subgroup),size=2, alpha=0.9)+
+  theme_classic()
+```
+
+
+*This section run on bio server R*
+
+Load snps with vcfR: 
+```{r}
+# # Populate the ID column of VCF data:
+# snps <- read.vcfR("killerwhale4_snps.ID.dups_kin_removed.filter1.miss.biallel.min100kb.autosomes.hwe.maf.LDprunedr08.vcf")
+# 
+# # add IDs:
+# snps <- addID(snps, sep = "_")
+# 
+# # Convert vcfR objects to objects supported by other R packages (such as StAMPP)
+# snp_data_fst_subgroups <- vcfR2genlight(snps)
+```
+
+Add pop info to the snp data: 
+```{r}
+# sample_info_subgroups <- readRDS("sample_info_genetic_subgroup.rds")
+# snp_data_fst_subgroups@pop <- as.factor(sample_info_subgroups$genetic_subgroup)
+# fst_snps_subgroups <- snp_data_fst_subgroups
+```
+
+Calculate fst: 
+```{r}
+# # Calculate Fst - run on server
+# kws_fst_subgroups <- stamppFst(fst_snps_subgroups, nboots = 100, percent = 95, nclusters = 45)
+# saveRDS(kws_fst_subgroups, "kws_fst_subgroups.rds")
+# write.csv(kws_fst_subgroups$Fsts, "kws_fst_subgroups.csv")
+```
+
+*Continue in R*
+
+Load results: 
+```{r}
+kws_fst_subgroups <- readRDS("Fst/kws_fst_subgroups.rds")
+kws_fst_subgroups
+```
+
+
